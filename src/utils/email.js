@@ -1,16 +1,13 @@
-const nodemailer = require("nodemailer")
+const transporter= require("./transporter")
+async function sendEmail(to, otp, username,otpExpiry) {
 
-const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: {
-        user: process.env.EMAIL,
-        pass: process.env.EMAIL_PASSWORD
-    }
-})
-
-async function sendEmail(to, otp, username) {
 
     try {
+
+        const expiryTime = new Date(otpExpiry).toLocaleString("en-IN",{
+        timeZone: "Asia/Kolkata"
+    }
+    )
 
         console.log("Sending email...")
         const info = await transporter.sendMail({
@@ -19,7 +16,7 @@ async function sendEmail(to, otp, username) {
             subject: "OTP Verification",
             html: `
                 <h2>Hi ${username}</h2>
-                <p>Your OTP is: ${otp} Valid for 5 minutes.</p>
+                <p>Your OTP is: ${otp} Valid till ${expiryTime}.</p>
             `
         })
         console.log(to)
