@@ -1,4 +1,4 @@
-const {body, validatorOption} = require("express-validator")
+const {body, validationResult} = require("express-validator")
 
 const registerValidator = [
 
@@ -22,8 +22,8 @@ const registerValidator = [
       minSymbols: 1
    })
    .withMessage(
-      "Password must contain uppercase, lowercase, number and special character")
-   ];
+      "Password must contain uppercase, lowercase, number and special character"),
+   
 
     (req, res, next) => {
 
@@ -32,12 +32,13 @@ const registerValidator = [
       if(!errors.isEmpty()){
 
          return res.status(400).json({
-            errors: errors.array()
+            success:false,
+            errors: errors.array()[0].msg
          })
       }
 
       next()
    }
-
+];
 
 module.exports = registerValidator

@@ -1,6 +1,6 @@
 const bcrypt = require("bcryptjs")
 
-async function verifyOTP(user, enteredOTP) {
+async function otpVerification(user, enteredOTP) {
 
     // Check user
     if (!user) {
@@ -10,6 +10,10 @@ async function verifyOTP(user, enteredOTP) {
             message: "User not found!"
         }
 
+    }
+//null guard??
+     if (!user.otp) {
+        return { success: false, message: "No OTP found. Please request a new one." }
     }
 
     // Check expiry
@@ -43,4 +47,4 @@ async function verifyOTP(user, enteredOTP) {
 
 }
 
-module.exports = verifyOTP
+module.exports = otpVerification

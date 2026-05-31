@@ -2,10 +2,11 @@ const userModel = require("../models/user.model")
 const jwt = require("jsonwebtoken")
 const createOTP = require("../utils/createOTP")
 const sendEmail = require("../utils/email")
-const verifyOTPUtil = require("../utils/verifyOTP")
+const verifyOTPUtil = require("../utils/otpVerification")
 const confimrationMail= require("../utils/confirmationMail")
 const generateToken= require("../utils/generateToken")
 const sendCookie= require("../utils/sendCookie")
+const checkTempBlock = require("../utils/checkTempBlock")
 const bcrypt= require("bcryptjs")
 
 
@@ -90,58 +91,46 @@ async function registerUser(req, res) {
 }
 
 /////////////////// VERIFY OTP ///////////////////
-
 async function verifyOTP(req, res) {
-
     try {
 
         const { otp } = req.body
 
-        // Get Token
-        const token = req.cookies.cookieToken
+        // req.user comes from otpLimiter middleware — no need to fetch again
+        const user = req.user
 
-        if (!token) {
-
-            return res.status(401).json({
-
-                message: "Unauthorized!"
-
-            })
-
-        }
-
-        // Decode Token
-        const decoded = jwt.verify(
-
-            token,
-
-            process.env.JWT_SECRET
-
-        )
-
-        // Find User
-        const user = await userModel.findById(decoded.id)
-
-        if (!user) {
-
-            return res.status(404).json({
-
-                message: "User not found!"
-
-            })
-
-        }
-
-        // Verify OTP
         const otpResult = await verifyOTPUtil(user, otp)
 
         if (!otpResult.success) {
+
+            // ── Wrong OTP: increment counter ──
+            user.otpWrongAttempts = (user.otpWrongAttempts || 0) + 1
+
+            if (user.otpWrongAttempts >= 3) {
+                user.tempBlockedUntil = new Date(Date.now() + 30 * 60 * 1000)
+                user.otpWrongAttempts = 0
+                await user.save()
+
+                return res.status(429).json({
+                    code: "TEMP_BLOCKED",
+                    message: "Too many wrong attempts. Account blocked for 30 minutes."
+                })
+            }
+
+            await user.save()
+
+            const attemptsLeft = 3 - user.otpWrongAttempts
             return res.status(400).json({
-                message: otpResult.message
+                message: otpResult.message,
+                attemptsLeft: `${attemptsLeft} attempt${attemptsLeft > 1 ? "s" : ""} left`
             })
         }
 
-
+        // ── Correct OTP: reset all counters ──
+        user.otpWrongAttempts = 0
+        user.otpResendCount = 0
+        user.tempBlockedUntil = null
+        
  // OTP TYPE HANDLER
 
         switch (user.otpType) {
@@ -212,7 +201,6 @@ async function verifyOTP(req, res) {
         })
 
     }
-
     catch (err) {
 
         res.status(500).json({
@@ -222,43 +210,36 @@ async function verifyOTP(req, res) {
         })
 
     }
-
 }
 
 /////////////////// RESEND OTP ///////////////////
-
 async function resendOTP(req, res) {
 
     try {
 
-        const { email } = req.body
-
-        // Find User
-        const user =
-        await userModel.findOne({ email })
-
-        // Check User
-        if (!user) {
-
-            return res.status(404).json({
-
-                message: "User not found!"
-
-            })
-
-        }
-
-        // Already Verified
-        if (user.isVerified) {
-
+        const user= req.user
+        
+        if(user.isVerified && user.otpType==="register" ){
             return res.status(400).json({
-
-                message:
-                "User already verified!"
-
+                message: "User already verified!"
             })
-
         }
+
+        // ── Increment resend counter ──
+        user.otpResendCount = (user.otpResendCount || 0) + 1
+
+        if (user.otpResendCount > 5) {
+
+            user.temporaryLockUntil = new Date(Date.now() + 30 * 60 * 1000)
+            user.otpResendCount = 0
+            await user.save()
+
+         return res.status(403).json({
+                code: "PROFILE_LOCKED",
+                message: "Account locked for 30 mins: too many OTP resend requests."
+            })
+        }
+
 
         // Create New OTP
         const {
@@ -310,7 +291,6 @@ async function resendOTP(req, res) {
 }
 
 ///////////////////////// LOGIN //////////////////
-
 //pw
 async function login(req,res) {
     try {
@@ -318,6 +298,7 @@ async function login(req,res) {
         const {email,password} = req.body
 
         const user= await userModel.findOne({email})
+
 //check in db if user saved
         if(!user){
             return res.status(404).json({
@@ -330,18 +311,68 @@ async function login(req,res) {
                 message: "User is not verified!"
             })
         }
+      
+//now check if user acc in blocked or not//
+        const {blocked, expired} = await checkTempBlock(user)
+
+        if(blocked) {
+            return res.status(429).json({
+                code: "TEMP_BLOCKED",
+                message: blockStatus.message
+            })
+        }
+
+        if(expired){
+            user.temporaryLockUntill= null
+            user.wrongPassEntered= 0
+
+            await user.save()
+        }
+
+
 //check password method 1 of login
         const passMatch = await bcrypt.compare(password,user.password)
         
         if(!passMatch){
-            return res.status(404).json({
-                message: "Wrong password !"
+
+            user.wrongPassEntered = (user.wrongPassEntered || 0) + 1
+
+            if(user.wrongPassEntered >=3 ) {
+                const{otp, hashedOTP,otpExpiry} = createOTP()
+
+                user.otp = hashedOTP
+                user.otpExpiry = otpExpiry
+                user.otpType= "login"
+                user.wrongPassEntered= 0
+
+                await user.save()
+
+                await sendEmail(user.email, otp, user.username, otpExpiry)
+
+                const token = generateToken(user._id, "10m")
+                sendCookie(res, token)
+
+              
+                res.status(403).json({
+                    code: "PASSWORD_ATTEMPTS_EXCEEDED",
+                    message: "Too many wrong attempts. An OTP has been sent to your email for verification."
+                })
+            }
+
+            await user.save()
+            
+            const attemptsLeft = 3 - user.passwordWrongAttempts
+            return res.status(401).json({
+                message: "Wrong password!",
+                attemptsLeft: `${attemptsLeft} attempt${attemptsLeft > 1 ? "s" : ""} left`
             })
         }
-
-//set user as online
-    user.isOnline = true
-    await user.save()        
+        
+    // Correct password — reset counter
+        user.passwordWrongAttempts = 0
+        user.isOnline = true
+        await user.save()
+     
 
 // Temporary Token
        const token = generateToken(user._id, "10m")
@@ -355,6 +386,7 @@ async function login(req,res) {
             message:
             "User logged in successfully!"
         })       
+
 
 } 
 
@@ -470,16 +502,28 @@ async function forgotPassword(req,res) {
             })
         }
 
-        const {otp,hashedOTP,otpExpiry} = await createOTP()
-
-// Forgot Password OTP
-        if(user.otpType === "forgot-password") {
-         user.canResetPassword = true
+        if(user.isProfileLocked){
+            return res.status(403).json({
+                message: "User profile locked !!"
+            }) 
         }
 
-        user.otp= hashedOTP
-        user.otpExpiry= otpExpiry
+        if(user.temporaryLockUntill && user.temporaryLockUntill>new Date()){
+
+            const timeLeft= Math.ceil((user.temporaryLockUntill - new Date()) /60000)
+            return res.status(403).json({
+                code: "TEMP_BLOCKED",
+                message: `Account blocked. Try again in ${timeLeft} minute${timeLeft > 1 ? "s" : ""}.`
+            })
+             
+        }
+
+        const {otp,hashedOTP,otpExpiry} = await createOTP()
+
+        user.otp = hashedOTP
+        user.otpExpiry = otpExpiry
         user.otpType = "forgot-password"
+        user.canResetPassword = false
 
         await user.save()
 

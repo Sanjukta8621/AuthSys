@@ -39,6 +39,26 @@ const userSchema = new mongoose.Schema({
     canResetPassword: {
     type: Boolean,
     default: false
+    },
+
+    wrongOtpAttempt:{
+        type: Number,
+        default:0
+    },
+
+    otpResendCount: {
+        type: Number,
+        default: 0
+    },
+
+    temporaryLockUntill: {
+        type: Date,
+        default: null
+    },
+
+    wrongPassEntered: {
+        type: Number,
+        default: 0
     }
 
 })
