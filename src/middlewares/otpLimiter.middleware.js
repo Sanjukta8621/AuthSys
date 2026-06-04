@@ -17,7 +17,7 @@ try{
 
         if (blockStatus.expired) {
             req.user.temporaryLockUntil = null
-            req.user.otpWrongAttempts = 0
+            req.user.wrongOtpAttempt = 0
             await req.user.save()
         }
     next()

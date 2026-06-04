@@ -8,6 +8,7 @@ const generateToken= require("../utils/generateToken")
 const sendCookie= require("../utils/sendCookie")
 const checkTempBlock = require("../utils/checkTempBlock")
 const bcrypt= require("bcryptjs")
+const clearCookie = require("../utils/clearCookie")
 
 
 /////////////////// REGISTER USER ///////////////////
@@ -18,14 +19,42 @@ async function registerUser(req, res) {
         const { username, email, password } = req.body
 
         // Check existing user
-        const isUserAlreadyPresent =
-        await userModel.findOne({ email })
+        const isUserAlreadyPresent = await userModel.findOne({ email })
 
         if (isUserAlreadyPresent) {
 
-            return res.status(409).json({
+           if(isUserAlreadyPresent.isVerified){
+                return res.status(409).json({
+                message: "Email already registered!!"
+             })
+           } 
+
+            const {otp,hashedOTP,otpExpiry } = await createOTP() 
+
+            const hashedPass= await bcrypt.hash(password,10)
+
+            isUserAlreadyPresent.username = username;
+            isUserAlreadyPresent.password = hashedPass;
+            isUserAlreadyPresent.otp = hashedOTP;
+            isUserAlreadyPresent.otpExpiry = otpExpiry;
+            isUserAlreadyPresent.otpType = "register";
+
+            await isUserAlreadyPresent.save()
+
+            await sendEmail(
+                isUserAlreadyPresent.email,
+                otp,
+              isUserAlreadyPresent.username,
+                otpExpiry
+            )
+
+            const token =generateToken(isUserAlreadyPresent._id, "10m")
+
+            sendCookie(res, token)
+
+            return res.status(200).json({
                 message:
-                "User email already exists!"
+                "Account exists but is not verified. New OTP sent."
             })
 
         }
@@ -104,11 +133,11 @@ async function verifyOTP(req, res) {
         if (!otpResult.success) {
 
             // ── Wrong OTP: increment counter ──
-            user.otpWrongAttempts = (user.otpWrongAttempts || 0) + 1
+            user.wrongOtpAttempt = (user.wrongOtpAttempt || 0) + 1
 
-            if (user.otpWrongAttempts >= 3) {
-                user.tempBlockedUntil = new Date(Date.now() + 30 * 60 * 1000)
-                user.otpWrongAttempts = 0
+            if (user.wrongOtpAttempt >= 3) {
+                user.temporaryLockUntil = new Date(Date.now() + 30 * 60 * 1000)
+                user.wrongOtpAttempt = 0
                 await user.save()
 
                 return res.status(429).json({
@@ -119,7 +148,7 @@ async function verifyOTP(req, res) {
 
             await user.save()
 
-            const attemptsLeft = 3 - user.otpWrongAttempts
+            const attemptsLeft = 3 - user.wrongOtpAttempt
             return res.status(400).json({
                 message: otpResult.message,
                 attemptsLeft: `${attemptsLeft} attempt${attemptsLeft > 1 ? "s" : ""} left`
@@ -127,9 +156,9 @@ async function verifyOTP(req, res) {
         }
 
         // ── Correct OTP: reset all counters ──
-        user.otpWrongAttempts = 0
+        user.wrongOtpAttempt = 0
         user.otpResendCount = 0
-        user.tempBlockedUntil = null
+        user.temporaryLockUntil = null
         
  // OTP TYPE HANDLER
 
@@ -313,21 +342,21 @@ async function login(req,res) {
         }
       
 //now check if user acc in blocked or not//
-        const {blocked, expired} = await checkTempBlock(user)
+    const blockStatus = await checkTempBlock(user)
 
-        if(blocked) {
-            return res.status(429).json({
-                code: "TEMP_BLOCKED",
-                message: blockStatus.message
-            })
-        }
+if (blockStatus.blocked) {
+    return res.status(429).json({
+        code: "TEMP_BLOCKED",
+        message: blockStatus.message
+    })
+}
 
-        if(expired){
-            user.temporaryLockUntill= null
-            user.wrongPassEntered= 0
+if (blockStatus.expired) {
+    user.temporarylockedUntill = null
+    user.passwordWrongAttempt = 0
 
-            await user.save()
-        }
+    await user.save()
+}
 
 
 //check password method 1 of login
@@ -338,7 +367,7 @@ async function login(req,res) {
             user.wrongPassEntered = (user.wrongPassEntered || 0) + 1
 
             if(user.wrongPassEntered >=3 ) {
-                const{otp, hashedOTP,otpExpiry} = createOTP()
+                const{otp, hashedOTP,otpExpiry} = await createOTP()
 
                 user.otp = hashedOTP
                 user.otpExpiry = otpExpiry
@@ -349,11 +378,11 @@ async function login(req,res) {
 
                 await sendEmail(user.email, otp, user.username, otpExpiry)
 
-                const token = generateToken(user._id, "10m")
+                const token = generateToken(user._id)
                 sendCookie(res, token)
 
               
-                res.status(403).json({
+                return res.status(403).json({
                     code: "PASSWORD_ATTEMPTS_EXCEEDED",
                     message: "Too many wrong attempts. An OTP has been sent to your email for verification."
                 })
@@ -361,7 +390,7 @@ async function login(req,res) {
 
             await user.save()
             
-            const attemptsLeft = 3 - user.passwordWrongAttempts
+            const attemptsLeft = 3 - user.wrongPassEntered
             return res.status(401).json({
                 message: "Wrong password!",
                 attemptsLeft: `${attemptsLeft} attempt${attemptsLeft > 1 ? "s" : ""} left`
@@ -369,7 +398,7 @@ async function login(req,res) {
         }
         
     // Correct password — reset counter
-        user.passwordWrongAttempts = 0
+        user.wrongPassEntered = 0
         user.isOnline = true
         await user.save()
      
@@ -436,10 +465,6 @@ async function loginOTP(req,res) {
             otpExpiry
         ) 
 
-//set user as online
-    user.isOnline = true
-    await user.save()  
-
 
 // Temporary Token
        const token = generateToken(user._id, "10m")
@@ -474,7 +499,8 @@ async function logout(req, res) {
         user.isOnline = false
         await user.save()
 
-        res.clearCookie("cookieToken")
+         clearCookie(res)
+         
         return res.status(200).json({
             message: "Logout successful!"
         })
@@ -490,35 +516,35 @@ async function logout(req, res) {
 }
 
 ///////////////Forget PW//////////
-async function forgotPassword(req,res) {
+async function forgotPassword(req, res) {
     try {
-        const {email} = req.body
-        
-        const user= await userModel.findOne({email})
+        const { email } = req.body
 
-        if(!user) {
+        const user = await userModel.findOne({ email })
+
+        if (!user) {
             return res.status(404).json({
-                message: "User not found !!"
+                message: "User not found!"
+            })
+        
+        }
+        // ── using checkTempBlock util instead of manual check ──
+        const blockStatus = await checkTempBlock(user)
+
+        if (blockStatus.blocked) {
+            return res.status(429).json({
+                code: blockStatus.code,
+                message: blockStatus.message
             })
         }
 
-        if(user.isProfileLocked){
-            return res.status(403).json({
-                message: "User profile locked !!"
-            }) 
+        if (blockStatus.expired) {
+            user.temporaryLockUntill = null
+            user.wrongOtpAttempt = 0
+            await user.save()
         }
 
-        if(user.temporaryLockUntill && user.temporaryLockUntill>new Date()){
-
-            const timeLeft= Math.ceil((user.temporaryLockUntill - new Date()) /60000)
-            return res.status(403).json({
-                code: "TEMP_BLOCKED",
-                message: `Account blocked. Try again in ${timeLeft} minute${timeLeft > 1 ? "s" : ""}.`
-            })
-             
-        }
-
-        const {otp,hashedOTP,otpExpiry} = await createOTP()
+        const { otp, hashedOTP, otpExpiry } = await createOTP()
 
         user.otp = hashedOTP
         user.otpExpiry = otpExpiry
@@ -529,13 +555,16 @@ async function forgotPassword(req,res) {
 
         await sendEmail(user.email, otp, user.username, otpExpiry)
 
-        res.status(200).json({
-            message: "Reset password verification mail send !"
-        })
+        // ── added these two lines — was missing, causing Unauthorized on verify-otp ──
+        const token = await generateToken(user._id, "10m")
+        sendCookie(res, token)
 
-    } 
-    
-    catch (error) {
+        res.status(200).json({
+            message: "Reset password verification mail sent!"
+        })
+    }
+ 
+catch (error) {
         return res.status(500).json({
             message: error.message
         })

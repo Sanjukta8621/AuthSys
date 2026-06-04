@@ -61,7 +61,19 @@ const userSchema = new mongoose.Schema({
         default: 0
     }
 
-})
+},
+{ timestamps: true })
+
+
+//adding indedx for auto deletion of unverified users in db
+
+userSchema.index(
+    {createdAt: 1},
+    {
+        expireAfterSeconds : 60*60*24,  //after 24 hours of being unverified
+        partialFilterExpression: {isVerified: false}  //only deletes unverified users
+    }
+)
 
 const userModel= mongoose.model("User", userSchema)
 
