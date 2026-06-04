@@ -1,4 +1,4 @@
-# AuthSys
+# AuthSys-OTP Based
 Mongodb
 Features:
 - JWT Authentication
