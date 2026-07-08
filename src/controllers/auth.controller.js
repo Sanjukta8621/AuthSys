@@ -2,121 +2,91 @@ const userModel = require("../models/user.model")
 const jwt = require("jsonwebtoken")
 const createOTP = require("../utils/createOTP")
 const sendEmail = require("../utils/email")
-const verifyOTPUtil = require("../utils/otpVerification")
+const otpVerification = require("../utils/otpVerification")
 const confimrationMail= require("../utils/confirmationMail")
-const generateToken= require("../utils/generateToken")
-const sendCookie= require("../utils/sendCookie")
+const { generateTempToken, generateAccessToken, generateRefreshToken } = require("../utils/generateToken")
+const { sendTempCookie, sendRefreshCookie } = require("../utils/sendCookie")
+const { clearTempCookie, clearRefreshCookie, clearAuthCookies } = require("../utils/clearCookie")
 const checkTempBlock = require("../utils/checkTempBlock")
 const bcrypt= require("bcryptjs")
-const clearCookie = require("../utils/clearCookie")
+const createSession = require("../utils/createSession")
+const sessionModel = require("../models/session.model")
+const crypto = require("crypto")
+
 
 
 /////////////////// REGISTER USER ///////////////////
 async function registerUser(req, res) {
-
     try {
 
         const { username, email, password } = req.body
 
-        // Check existing user
-        const isUserAlreadyPresent = await userModel.findOne({ email })
+        const existingUser = await userModel.findOne({ email })
 
-        if (isUserAlreadyPresent) {
+        // Already verified — permanent rejection
+        if (existingUser && existingUser.isVerified) {
+            return res.status(409).json({
+                message: "Email already registered!"
+            })
+        }
 
-           if(isUserAlreadyPresent.isVerified){
-                return res.status(409).json({
-                message: "Email already registered!!"
-             })
-           } 
+        const { otp, hashedOTP, otpExpiry } = await createOTP()
+        const hashedPassword = await bcrypt.hash(password, 10)
 
-            const {otp,hashedOTP,otpExpiry } = await createOTP() 
+        let user
+        const isReturningUser = !!(existingUser && !existingUser.isVerified)
 
-            const hashedPass= await bcrypt.hash(password,10)
+        if (isReturningUser) {
 
-            isUserAlreadyPresent.username = username;
-            isUserAlreadyPresent.password = hashedPass;
-            isUserAlreadyPresent.otp = hashedOTP;
-            isUserAlreadyPresent.otpExpiry = otpExpiry;
-            isUserAlreadyPresent.otpType = "register";
+            // Unverified ghost user — overwrite and resend
+            existingUser.username = username
+            existingUser.password = hashedPassword
+            existingUser.otp = hashedOTP
+            existingUser.otpExpiry = otpExpiry
+            existingUser.otpType = "register"
+            existingUser.wrongOtpAttempt = 0
+            existingUser.otpResendCount = 0
+            existingUser.temporaryLockUntil = null
 
-            await isUserAlreadyPresent.save()
+            await existingUser.save()
+            user = existingUser
 
-            await sendEmail(
-                isUserAlreadyPresent.email,
-                otp,
-              isUserAlreadyPresent.username,
-                otpExpiry
-            )
+        } else {
 
-            const token =generateToken(isUserAlreadyPresent._id, "10m")
-
-            sendCookie(res, token)
-
-            return res.status(200).json({
-                message:
-                "Account exists but is not verified. New OTP sent."
+            // Brand new user
+            user = await userModel.create({
+                username,
+                email,
+                password: hashedPassword,
+                isVerified: false,
+                otp: hashedOTP,
+                otpExpiry,
+                otpType: "register"
             })
 
         }
 
-        //pw hashing
-        const hashedPass= await bcrypt.hash(password,10)
+        await sendEmail(user.email, otp, user.username, otpExpiry)
 
-        // Create OTP
-        const {
-            otp,
-            hashedOTP,
-            otpExpiry
-        } = await createOTP()
+        // temp token — only for OTP verification step
+        const tempToken = generateTempToken(user._id)
+        sendTempCookie(res, tempToken)
 
-        // Create User
-        const user = await userModel.create({
-
-            username,
-            email,
-            password: hashedPass,
-            otp: hashedOTP,
-            otpExpiry,
-            isVerified: false,
-            otpType: "register"
-
+        return res.status(201).json({
+            message: isReturningUser
+                ? "Account pending verification. New OTP sent."
+                : "OTP sent successfully!",
+            user: {
+                id: user._id,
+                username: user.username,
+                email: user.email,
+                isVerified: user.isVerified
+            }
         })
 
-        // Send Email
-        await sendEmail(
-            email,
-            otp,
-            username,
-            otpExpiry
-        ) 
-
-        // Temporary Token
-       const token = generateToken(user._id, "10m")
-
-
-        // Cookie
-       sendCookie(res, token)
-
-        // Response
-        res.status(200).json({
-
-            message:
-            "OTP sent to email successfully!"
-
-        })
-
+    } catch (err) {
+        return res.status(500).json({ message: err.message })
     }
-
-    catch (err) {
-
-        res.status(500).json({
-
-            message: err.message
-
-        })
-
-    }
-
 }
 
 /////////////////// VERIFY OTP ///////////////////
@@ -124,15 +94,13 @@ async function verifyOTP(req, res) {
     try {
 
         const { otp } = req.body
+        const user = req.user   // from verifyTempToken middleware
 
-        // req.user comes from otpLimiter middleware — no need to fetch again
-        const user = req.user
+        const otpResult = await otpVerification(user, otp)
 
-        const otpResult = await verifyOTPUtil(user, otp)
-
+        // ── Wrong OTP ──
         if (!otpResult.success) {
 
-            // ── Wrong OTP: increment counter ──
             user.wrongOtpAttempt = (user.wrongOtpAttempt || 0) + 1
 
             if (user.wrongOtpAttempt >= 3) {
@@ -155,91 +123,71 @@ async function verifyOTP(req, res) {
             })
         }
 
-        // ── Correct OTP: reset all counters ──
+        // ── Correct OTP: reset counters ──
         user.wrongOtpAttempt = 0
         user.otpResendCount = 0
         user.temporaryLockUntil = null
-        
- // OTP TYPE HANDLER
 
+        // ── OTP TYPE HANDLER — before clearing otpType ──
         switch (user.otpType) {
 
-            // Registration OTP
             case "register":
                 user.isVerified = true
-                user.isOnline = true
-
-                await confimrationMail(
-                    user.email,
-                    user.username
-                )
+                await confimrationMail(user.email, user.username)
                 break
 
-
-            // Forgot Password OTP
             case "forgot-password":
                 user.canResetPassword = true
                 break
 
-
-            // Login OTP
             case "login":
                 user.isOnline = true
                 break
 
-            // Invalid OTP Type
             default:
                 return res.status(400).json({
                     message: "Invalid OTP type!"
                 })
         }
 
-
-// Remove OTP
+        // ── Clear OTP fields AFTER switch ──
         user.otp = null
         user.otpExpiry = null
         user.otpType = null
 
-
         await user.save()
 
+        // ── forgot-password: no session needed ──
+        // just confirm OTP passed, let them hit /reset-password
+        if (user.canResetPassword) {
 
-// Final Login Token
-       const finalToken = generateToken(user._id)
+            return res.status(200).json({
+                message: "OTP verified! You can now reset your password."
+            })
+        }
 
+        // ── register + login: create full session ──
+        const { accessToken } = await createSession(user, req, res)
 
-// Cookie
-       sendCookie(res, finalToken)
+        // clear temp cookie — session now handles auth
+        clearTempCookie(res)
 
-
-// Response
-        res.status(200).json({
-
-            message:
-            "Email verified successfully!",
-
+        return res.status(200).json({
+            message: "Verified successfully!",
+            accessToken,
             user: {
-
                 id: user._id,
                 username: user.username,
                 email: user.email,
                 isVerified: user.isVerified
-
             }
-
         })
 
-    }
-    catch (err) {
-
-        res.status(500).json({
-
-            message: err.message
-
-        })
-
+    } catch (err) {
+        return res.status(500).json({ message: err.message })
     }
 }
+
 
 /////////////////// RESEND OTP ///////////////////
 async function resendOTP(req, res) {
@@ -352,8 +300,8 @@ if (blockStatus.blocked) {
 }
 
 if (blockStatus.expired) {
-    user.temporarylockedUntill = null
-    user.passwordWrongAttempt = 0
+    user.temporaryLockUntil = null
+    user.wrongPassAttempt = 0
 
     await user.save()
 }
@@ -364,22 +312,22 @@ if (blockStatus.expired) {
         
         if(!passMatch){
 
-            user.wrongPassEntered = (user.wrongPassEntered || 0) + 1
+            user.wrongPassAttempt = (user.wrongPassAttempt || 0) + 1
 
-            if(user.wrongPassEntered >=3 ) {
+            if(user.wrongPassAttempt >=3 ) {
                 const{otp, hashedOTP,otpExpiry} = await createOTP()
 
                 user.otp = hashedOTP
                 user.otpExpiry = otpExpiry
                 user.otpType= "login"
-                user.wrongPassEntered= 0
+                user.wrongPassAttempt= 0
 
                 await user.save()
 
                 await sendEmail(user.email, otp, user.username, otpExpiry)
 
-                const token = generateToken(user._id)
-                sendCookie(res, token)
+                const tempToken = generateTempToken(user._id)
+                sendTempCookie(res, tempToken)
 
               
                 return res.status(403).json({
@@ -390,7 +338,7 @@ if (blockStatus.expired) {
 
             await user.save()
             
-            const attemptsLeft = 3 - user.wrongPassEntered
+            const attemptsLeft = 3 - user.wrongPassAttempt
             return res.status(401).json({
                 message: "Wrong password!",
                 attemptsLeft: `${attemptsLeft} attempt${attemptsLeft > 1 ? "s" : ""} left`
@@ -398,25 +346,23 @@ if (blockStatus.expired) {
         }
         
     // Correct password — reset counter
-        user.wrongPassEntered = 0
+        user.wrongPassAttempt = 0
         user.isOnline = true
         await user.save()
      
 
-// Temporary Token
-       const token = generateToken(user._id, "10m")
 
+        const { accessToken } = await createSession(user, req, res)
 
-// Cookie
-       sendCookie(res, token)
-
-// Response
-        res.status(200).json({
-            message:
-            "User logged in successfully!"
-        })       
-
-
+        return res.status(200).json({
+             message: "Logged in successfully!",
+             accessToken,
+            user: {
+               id: user._id,
+               username: user.username,
+               email: user.email
+            }
+        }) 
 } 
 
 catch (err) {
@@ -466,12 +412,9 @@ async function loginOTP(req,res) {
         ) 
 
 
-// Temporary Token
-       const token = generateToken(user._id, "10m")
 
-
-// Cookie
-       sendCookie(res, token)
+                const tempToken = generateTempToken(user._id)
+                sendTempCookie(res, tempToken)
 
 
 
@@ -489,31 +432,30 @@ async function loginOTP(req,res) {
     }
 }
 
-/////////////////// LOGOUT ///////////////////
-async function logout(req, res) {
 
+
+////////////////////GetMe///////////////////
+async function getMe(req, res) {
     try {
-        // Find logged in user
-        const user = req.user
-        // Set offline
-        user.isOnline = false
-        await user.save()
+        const user = req.user   // from verifyAccessToken middleware
 
-         clearCookie(res)
-         
         return res.status(200).json({
-            message: "Logout successful!"
+            user: {
+                id: user._id,
+                username: user.username,
+                email: user.email,
+                isVerified: user.isVerified,
+                isOnline: user.isOnline,
+                role: user.role
+            }
         })
+
+    } catch (err) {
+        return res.status(500).json({ message: err.message })
     }
-
-    catch (err) {
-        return res.status(500).json({
-            message: err.message
-        })
-
-    }
-
 }
+
+
 
 ///////////////Forget PW//////////
 async function forgotPassword(req, res) {
@@ -539,7 +481,7 @@ async function forgotPassword(req, res) {
         }
 
         if (blockStatus.expired) {
-            user.temporaryLockUntill = null
+            user.temporaryLockUntil = null
             user.wrongOtpAttempt = 0
             await user.save()
         }
@@ -555,9 +497,10 @@ async function forgotPassword(req, res) {
 
         await sendEmail(user.email, otp, user.username, otpExpiry)
 
-        // ── added these two lines — was missing, causing Unauthorized on verify-otp ──
-        const token = await generateToken(user._id, "10m")
-        sendCookie(res, token)
+        
+        const tempToken = generateTempToken(user._id)
+        sendTempCookie(res, tempToken)
+
 
         res.status(200).json({
             message: "Reset password verification mail sent!"
@@ -576,15 +519,9 @@ catch (error) {
 async function resetPassword(req,res) {
     try {
 
-        const {email,newPassword} =req.body
+        const {newPassword} =req.body
 
-        const user= await userModel.findOne({email})
-
-        if(!user) {
-            return res.status(404).json({
-                message: "User not found !!"
-            })
-        }
+        const user = req.user
 
         if(!user.canResetPassword) {
             return res.status(403).json({
@@ -598,9 +535,13 @@ async function resetPassword(req,res) {
         user.canResetPassword=false
         await user.save()
 
+
+       clearTempCookie(res)
+
+
         res.status(200).json({
             message:
-            "Password reset successful!"
+            "Password reset successful! Please login with your new password!"
         })
     } 
     catch (err) {
@@ -611,6 +552,155 @@ async function resetPassword(req,res) {
 }
 
 
+///////////////////////rotate token////////////
+async function rotateRefreshToken(req,res) {
+    
+   try {
+    const refreshToken = req.cookies.refreshToken
+
+    if(!refreshToken) {
+        return res.status(401).json({
+            message : "No refresh token found!"
+        })
+    }
+
+    const decoded = jwt.verify(
+        refreshToken,
+        process.env.JWT_SECRET
+    )
+
+    if (decoded.type !== "refresh") {
+            return res.status(401).json({
+                message: "Invalid token type!"
+            })
+    }
+
+    const refreshTokenHash = crypto
+            .createHash("sha256")
+            .update(refreshToken)
+            .digest("hex")
+
+
+    const session = await sessionModel.findOne({
+        refreshTokenHash,
+        revoked : false
+    })  
+    
+    
+    if (!session) {
+        return res.status(401).json(
+            {
+                message: "Invalid session!"
+            }
+        )
+    }
+
+    
+    const user = await userModel.findById(decoded.id)
+
+        if (!user) {
+            return res.status(404).json({
+                message: "User not found!"
+            })
+        }
+
+
+    const newRefreshToken = generateRefreshToken (user._id)
+    
+    const newRefreshTokenHash = crypto
+            .createHash("sha256")
+            .update(newRefreshToken)
+            .digest("hex")
+
+
+    session.refreshTokenHash = newRefreshTokenHash
+    await session.save()
+
+    sendRefreshCookie(res, newRefreshToken);
+
+    const newAccessToken = generateAccessToken(user._id,session._id)
+
+
+
+    return res.status(200).json({
+            message: "Token refreshed successfully!",
+            accessToken: newAccessToken
+        })
+
+    } 
+    
+    catch (err) {
+        return res.status(401).json({
+            message: "Invalid or expired refresh token!"
+        })
+    }
+    
+}
+
+
+/////////////////// LOGOUT ///////////////////
+async function logout(req, res) {
+
+    try {
+        // Find logged in user
+        const user = req.user
+
+        req.session.revoked = true;
+        await req.session.save();
+
+
+        // Set offline
+        user.isOnline = false
+        await user.save()
+
+        clearAuthCookies(res)
+         
+        return res.status(200).json({
+            message: "Logout successful!"
+        })
+    }
+
+    catch (err) {
+        return res.status(500).json({
+            message: err.message
+        })
+
+    }
+
+}
+
+
+//////////////////logout all///////////
+async function logOutAll(req,res) {
+   
+   try{ 
+    const user = req.user
+    
+    const session = await sessionModel.updateMany(
+        {user:user._id , revoked: false},
+        {revoked: true}
+    )
+
+
+    clearAuthCookies(res)
+
+    return res.status(201).json({
+        message: "Logged Out successfully from all devices!"
+    })
+
+}
+
+catch (err) {
+        return res.status(500).json({ message: err.message })
+    }
+}
+
+
+
+///////////////////
+
+
+
 
 
 module.exports = {
@@ -619,7 +709,10 @@ module.exports = {
     resendOTP,
     login,
     loginOTP,
-    logout,
+    getMe,
     forgotPassword,
-    resetPassword
+    resetPassword,
+    rotateRefreshToken,
+    logout,
+    logOutAll
 }

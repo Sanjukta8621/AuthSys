@@ -12,7 +12,7 @@ function authorizedRoles(...roles) {
     }
 }
 
-module.exports = authorizeRoles
+module.exports = authorizedRoles
 
 
 //hof used here

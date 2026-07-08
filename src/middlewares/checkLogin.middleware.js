@@ -3,7 +3,7 @@ const jwt = require("jsonwebtoken")
 async function checkLogin(req,res,next) {
     
     try {
-        const token = req.cookies.cookieToken
+        const token = req.cookies.tempToken   
         
         if(!token) {
             return next()

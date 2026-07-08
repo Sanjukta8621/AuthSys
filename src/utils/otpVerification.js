@@ -19,9 +19,16 @@ async function otpVerification(user, enteredOTP) {
     // Check expiry
     if (user.otpExpiry < Date.now()) {
 
+        user.otp = null
+        user.otpExpiry = null
+        user.otpType = null     
+        user.canResetPassword = false  
+        await user.save()
+
+
         return {
             success: false,
-            message: "OTP expired!"
+            message: "OTP expired!Request a new OTP!"
         }
 
     }

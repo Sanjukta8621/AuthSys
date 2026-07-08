@@ -37,8 +37,8 @@ const userSchema = new mongoose.Schema({
         default: "user"
     },
     canResetPassword: {
-    type: Boolean,
-    default: false
+        type: Boolean,
+        default: false
     },
 
     wrongOtpAttempt:{
@@ -51,12 +51,12 @@ const userSchema = new mongoose.Schema({
         default: 0
     },
 
-    temporaryLockUntill: {
+    temporaryLockUntil: {
         type: Date,
         default: null
     },
 
-    wrongPassEntered: {
+    wrongPassAttempt: {
         type: Number,
         default: 0
     }
