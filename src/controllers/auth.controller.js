@@ -94,11 +94,10 @@ async function verifyOTP(req, res) {
     try {
 
         const { otp } = req.body
-        const user = req.user   // from verifyTempToken middleware
+        const user = req.user
 
         const otpResult = await otpVerification(user, otp)
 
-        // ── Wrong OTP ──
         if (!otpResult.success) {
 
             user.wrongOtpAttempt = (user.wrongOtpAttempt || 0) + 1
@@ -123,13 +122,15 @@ async function verifyOTP(req, res) {
             })
         }
 
-        // ── Correct OTP: reset counters ──
+        // ── Correct OTP ──
         user.wrongOtpAttempt = 0
         user.otpResendCount = 0
         user.temporaryLockUntil = null
 
-        // ── OTP TYPE HANDLER — before clearing otpType ──
-        switch (user.otpType) {
+        // ── save otpType BEFORE clearing ──
+        const currentOtpType = user.otpType
+
+        switch (currentOtpType) {
 
             case "register":
                 user.isVerified = true
@@ -150,44 +151,49 @@ async function verifyOTP(req, res) {
                 })
         }
 
-        // ── Clear OTP fields AFTER switch ──
+        // ── clear OTP fields AFTER switch ──
         user.otp = null
         user.otpExpiry = null
         user.otpType = null
 
         await user.save()
 
-        // ── forgot-password: no session needed ──
-        // just confirm OTP passed, let them hit /reset-password
-        if (user.canResetPassword) {
-
+        // ── forgot-password: keep tempToken, redirect to reset-password ──
+        if (currentOtpType === "forgot-password") {
             return res.status(200).json({
                 message: "OTP verified! You can now reset your password."
             })
         }
 
-        // ── register + login: create full session ──
-        const { accessToken } = await createSession(user, req, res)
+        // ── register: clear cookie, redirect to login ──
+        if (currentOtpType === "register") {
+            clearTempCookie(res)
+            return res.status(200).json({
+                message: "Registration successful! Please login to continue."
+            })
+        }
 
-        // clear temp cookie — session now handles auth
-        clearTempCookie(res)
+        // ── login: create session ──
+        if (currentOtpType === "login") {
+            const { accessToken } = await createSession(user, req, res)
+            clearTempCookie(res)
 
-        return res.status(200).json({
-            message: "Verified successfully!",
-            accessToken,
-            user: {
-                id: user._id,
-                username: user.username,
-                email: user.email,
-                isVerified: user.isVerified
-            }
-        })
+            return res.status(200).json({
+                message: "Logged in successfully!",
+                accessToken,
+                user: {
+                    id: user._id,
+                    username: user.username,
+                    email: user.email,
+                    isVerified: user.isVerified
+                }
+            })
+        }
 
     } catch (err) {
         return res.status(500).json({ message: err.message })
     }
 }
-
 
 /////////////////// RESEND OTP ///////////////////
 async function resendOTP(req, res) {
@@ -282,6 +288,13 @@ async function login(req,res) {
                 message: "User email not found, Please register first!"
             })
         }
+
+// //check already logged in or not
+//         if(user.isOnline){
+//             return res.status(404).json({
+//                 message: "User already logged in!"
+//             })
+        // } 
 //check if regisration verified
         if(!user.isVerified) {
             return res.status(404).json({
@@ -385,6 +398,7 @@ async function loginOTP(req,res) {
             })
         }
 
+
         if (!user.isVerified) {
             return res.status(400).json({
                 message:
@@ -392,6 +406,12 @@ async function loginOTP(req,res) {
             })
         }
 
+// //check already logged in or not
+//         if(user.isOnline){
+//             return res.status(404).json({
+//                 message: "User already logged in!"
+//             })
+//         } 
 
         const {otp,hashedOTP,otpExpiry} = await createOTP()
 
