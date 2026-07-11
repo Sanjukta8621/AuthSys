@@ -8,13 +8,21 @@ async function checkLogin(req,res,next) {
           // ── check via isOnline flag from email/password ──
         const { email } = req.body
 
-        if (email) {
+              if (email) {
             const user = await userModel.findOne({ email })
 
-            if (user && user.isOnline) {
-                return res.status(400).json({
-                    message: "User already logged in!"
+            if (user) {
+                // ── check active unrevoked session exists ──
+                const activeSession = await sessionModel.findOne({
+                    user: user._id,
+                    revoked: false
                 })
+
+                if (activeSession) {
+                    return res.status(400).json({
+                        message: "User already logged in! Please logout first."
+                    })
+                }
             }
         }
 

@@ -21,7 +21,7 @@ function generateRefreshToken(userId) {
 return jwt.sign(
 {id: userId,
 type: "refresh"},
-process.env.JWT_SECRET,
+process.env.JWT_REFRESH_SECRET,
 {expiresIn: "7d"})
 }
 
