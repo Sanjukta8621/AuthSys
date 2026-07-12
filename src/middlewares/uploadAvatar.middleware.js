@@ -3,6 +3,12 @@ const path = require("path")
 const cloudinary = require("../config/cloudinary")
 const fs = require("fs")
 
+
+// create uploads folder if it doesn't exist
+if (!fs.existsSync("uploads")) {
+    fs.mkdirSync("uploads")
+}
+
 // ── save to local disk first ──
 const storage = multer.diskStorage({
     destination: function (req, file, cb) {
