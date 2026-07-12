@@ -59,6 +59,17 @@ const userSchema = new mongoose.Schema({
     wrongPassAttempt: {
         type: Number,
         default: 0
+    },
+
+    avatar: {
+        url: {
+            type: String,
+            default: null
+        },
+        publicId: {
+            type: String,
+            default: null
+        }
     }
 
 },

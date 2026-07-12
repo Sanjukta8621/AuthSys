@@ -1,4 +1,5 @@
 const express = require("express")
+const uploadAvatar = require("../middlewares/uploadAvatar.middleware")
 const authController =require("../controllers/auth.controller")
 const {verifyTempToken,verifyAccessToken} = require("../middlewares/auth.middleware")
 const registerValidator = require("../middlewares/validators/registerValidator.middleware")
@@ -12,6 +13,7 @@ const routes = express.Router()
 //resgister
 routes.post(
     "/register",
+    uploadAvatar,
     registerValidator,
     authController.registerUser
 )

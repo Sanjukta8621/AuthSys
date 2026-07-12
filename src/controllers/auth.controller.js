@@ -1,5 +1,6 @@
 const userModel = require("../models/user.model")
 const jwt = require("jsonwebtoken")
+const cloudinary = require("../config/cloudinary")
 const createOTP = require("../utils/createOTP")
 const sendEmail = require("../utils/email")
 const otpVerification = require("../utils/otpVerification")
@@ -25,6 +26,11 @@ async function registerUser(req, res) {
 
         // Already verified — permanent rejection
         if (existingUser && existingUser.isVerified) {
+
+            if (req.file) {
+                await cloudinary.uploader.destroy(req.file.filename)
+            }
+
             return res.status(409).json({
                 message: "Email already registered!"
             })
@@ -32,6 +38,11 @@ async function registerUser(req, res) {
 
         const { otp, hashedOTP, otpExpiry } = await createOTP()
         const hashedPassword = await bcrypt.hash(password, 10)
+
+        const avatar = req.file
+            ? { url: req.file.path, publicId: req.file.filename }
+            : { url: null, publicId: null }
+
 
         let user
         const isReturningUser = !!(existingUser && !existingUser.isVerified)
@@ -61,7 +72,8 @@ async function registerUser(req, res) {
                 isVerified: false,
                 otp: hashedOTP,
                 otpExpiry,
-                otpType: "register"
+                otpType: "register",
+                avatar
             })
 
         }
@@ -80,11 +92,17 @@ async function registerUser(req, res) {
                 id: user._id,
                 username: user.username,
                 email: user.email,
-                isVerified: user.isVerified
+                isVerified: user.isVerified,
+                avatar: user.avatar?.url || null 
             }
         })
 
     } catch (err) {
+
+        if (req.file) {
+            await cloudinary.uploader.destroy(req.file.filename)
+        }
+
         return res.status(500).json({ message: err.message })
     }
 }
