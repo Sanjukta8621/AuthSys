@@ -59,6 +59,13 @@ async function registerUser(req, res) {
             existingUser.otpResendCount = 0
             existingUser.temporaryLockUntil = null
 
+            if (req.file) {
+                if (existingUser.avatar?.publicId) {
+                await cloudinary.uploader.destroy(existingUser.avatar.publicId)
+                }
+            existingUser.avatar = avatar
+            }
+
             await existingUser.save()
             user = existingUser
 
@@ -270,7 +277,7 @@ async function resendOTP(req, res) {
         )
 
         // Response
-        res.status(200).json({
+        return res.status(200).json({
 
             message:
             "OTP resent successfully!"
@@ -315,7 +322,7 @@ async function login(req,res) {
         // } 
 //check if regisration verified
         if(!user.isVerified) {
-            return res.status(404).json({
+            return res.status(400).json({
                 message: "User is not verified!"
             })
         }
@@ -484,7 +491,9 @@ async function getMe(req, res) {
                 email: user.email,
                 isVerified: user.isVerified,
                 isOnline: user.isOnline,
-                role: user.role
+                role: user.role,
+                avatar: user.avatar?.url || null  
+
             }
         })
 
@@ -719,10 +728,12 @@ async function logOutAll(req,res) {
         {revoked: true}
     )
 
+    user.isOnline = false
+    await user.save()
 
     clearAuthCookies(res)
 
-    return res.status(201).json({
+    return res.status(200).json({
         message: "Logged Out successfully from all devices!"
     })
 
