@@ -1,3 +1,5 @@
+const AppError = require("../utils/AppError")
+const catchAsync = require("../utils/catchAsync")
 const userModel = require("../models/user.model")
 const jwt = require("jsonwebtoken")
 const cloudinary = require("../config/cloudinary")
@@ -17,7 +19,7 @@ const crypto = require("crypto")
 
 
 /////////////////// REGISTER USER ///////////////////
-async function registerUser(req, res) {
+const registerUser = catchAsync(async (req, res, next) => {
     try {
 
         const { username, email, password } = req.body
@@ -26,14 +28,10 @@ async function registerUser(req, res) {
 
         // Already verified — permanent rejection
         if (existingUser && existingUser.isVerified) {
-
             if (req.file) {
                 await cloudinary.uploader.destroy(req.file.filename)
             }
-
-            return res.status(409).json({
-                message: "Email already registered!"
-            })
+            return next(new AppError("Email already registered!", 409))
         }
 
         const { otp, hashedOTP, otpExpiry } = await createOTP()
@@ -43,13 +41,11 @@ async function registerUser(req, res) {
             ? { url: req.file.path, publicId: req.file.filename }
             : { url: null, publicId: null }
 
-
         let user
         const isReturningUser = !!(existingUser && !existingUser.isVerified)
 
         if (isReturningUser) {
 
-            // Unverified ghost user — overwrite and resend
             existingUser.username = username
             existingUser.password = hashedPassword
             existingUser.otp = hashedOTP
@@ -61,9 +57,9 @@ async function registerUser(req, res) {
 
             if (req.file) {
                 if (existingUser.avatar?.publicId) {
-                await cloudinary.uploader.destroy(existingUser.avatar.publicId)
+                    await cloudinary.uploader.destroy(existingUser.avatar.publicId)
                 }
-            existingUser.avatar = avatar
+                existingUser.avatar = avatar
             }
 
             await existingUser.save()
@@ -71,7 +67,6 @@ async function registerUser(req, res) {
 
         } else {
 
-            // Brand new user
             user = await userModel.create({
                 username,
                 email,
@@ -82,12 +77,10 @@ async function registerUser(req, res) {
                 otpType: "register",
                 avatar
             })
-
         }
 
         await sendEmail(user.email, otp, user.username, otpExpiry)
 
-        // temp token — only for OTP verification step
         const tempToken = generateTempToken(user._id)
         sendTempCookie(res, tempToken)
 
@@ -100,23 +93,24 @@ async function registerUser(req, res) {
                 username: user.username,
                 email: user.email,
                 isVerified: user.isVerified,
-                avatar: user.avatar?.url || null 
+                avatar: user.avatar?.url || null
             }
         })
 
     } catch (err) {
 
+        // ── cleanup uploaded file if anything went wrong ──
         if (req.file) {
             await cloudinary.uploader.destroy(req.file.filename)
         }
 
-        return res.status(500).json({ message: err.message })
+        return next(new AppError(err.message, 500))
     }
-}
+})
+
 
 /////////////////// VERIFY OTP ///////////////////
-async function verifyOTP(req, res) {
-    try {
+const verifyOTP = catchAsync(async(req, res,next) => {
 
         const { otp } = req.body
         const user = req.user
@@ -215,15 +209,10 @@ async function verifyOTP(req, res) {
             })
         }
 
-    } catch (err) {
-        return res.status(500).json({ message: err.message })
-    }
-}
+    })
 
 /////////////////// RESEND OTP ///////////////////
-async function resendOTP(req, res) {
-
-    try {
+const resendOTP = catchAsync(async(req, res,next) =>  {
 
         const user= req.user
         
@@ -284,26 +273,12 @@ async function resendOTP(req, res) {
 
         })
 
-    }
-
-    catch (err) {
-
-        res.status(500).json({
-
-            message: err.message
-
-        })
-
-    }
-
-}
+    })
 
 ///////////////////////// LOGIN //////////////////
 //pw
-async function login(req,res) {
-    try {
-
-        const {email,password} = req.body
+const login = catchAsync(async(req, res,next) => {
+     const {email,password} = req.body
 
         const user= await userModel.findOne({email})
 
@@ -401,18 +376,10 @@ if (blockStatus.expired) {
                email: user.email
             }
         }) 
-} 
-
-catch (err) {
-        return res.status(500).json({
-            message: err.message
-        })
-    }    
-}
+})
 
 //otp
-async function loginOTP(req,res) {
-    try {
+const loginOTP = catchAsync(async(req, res,next) => {
         const {email} = req.body
 
         const user= await userModel.findOne({email})
@@ -468,20 +435,12 @@ async function loginOTP(req,res) {
             "Login OTP sent successfully!"
         })
 
-    } 
-    
-    catch (error) {
-        return res.status(500).json({
-            message: error.message
-        })
-    }
-}
+    })
 
 
 
 ////////////////////GetMe///////////////////
-async function getMe(req, res) {
-    try {
+const getMe = catchAsync(async(req, res,next) => {
         const user = req.user   // from verifyAccessToken middleware
 
         return res.status(200).json({
@@ -497,16 +456,12 @@ async function getMe(req, res) {
             }
         })
 
-    } catch (err) {
-        return res.status(500).json({ message: err.message })
-    }
-}
+    })
 
 
 
 ///////////////Forget PW//////////
-async function forgotPassword(req, res) {
-    try {
+const forgotPassword = catchAsync(async(req, res,next) => {
         const { email } = req.body
 
         const user = await userModel.findOne({ email })
@@ -552,19 +507,11 @@ async function forgotPassword(req, res) {
         res.status(200).json({
             message: "Reset password verification mail sent!"
         })
-    }
- 
-catch (error) {
-        return res.status(500).json({
-            message: error.message
-        })
-    }
-}
+    })
 
 
 /////////////////////Reset PW///////////////
-async function resetPassword(req,res) {
-    try {
+const resetPassword = catchAsync(async(req, res,next) => {
 
         const {newPassword} =req.body
 
@@ -590,19 +537,11 @@ async function resetPassword(req,res) {
             message:
             "Password reset successful! Please login with your new password!"
         })
-    } 
-    catch (err) {
-        return res.status(500).json({
-            message: err.message
-        })
-    }
-}
+    })
 
 
 ///////////////////////rotate token////////////
-async function rotateRefreshToken(req,res) {
-    
-   try {
+const rotateRefreshToken = catchAsync(async(req, res,next) => {
     const refreshToken = req.cookies.refreshToken
 
     if(!refreshToken) {
@@ -674,21 +613,11 @@ async function rotateRefreshToken(req,res) {
             accessToken: newAccessToken
         })
 
-    } 
-    
-    catch (err) {
-        return res.status(401).json({
-            message: "Invalid or expired refresh token!"
-        })
-    }
-    
-}
+    })
 
 
 /////////////////// LOGOUT ///////////////////
-async function logout(req, res) {
-
-    try {
+const logout = catchAsync(async(req, res,next) => {
         // Find logged in user
         const user = req.user
 
@@ -705,22 +634,11 @@ async function logout(req, res) {
         return res.status(200).json({
             message: "Logout successful!"
         })
-    }
-
-    catch (err) {
-        return res.status(500).json({
-            message: err.message
-        })
-
-    }
-
-}
+    })
 
 
 //////////////////logout all///////////
-async function logOutAll(req,res) {
-   
-   try{ 
+const logOutAll = catchAsync(async(req, res,next) => {
     const user = req.user
     
     const session = await sessionModel.updateMany(
@@ -737,12 +655,7 @@ async function logOutAll(req,res) {
         message: "Logged Out successfully from all devices!"
     })
 
-}
-
-catch (err) {
-        return res.status(500).json({ message: err.message })
-    }
-}
+})
 
 
 

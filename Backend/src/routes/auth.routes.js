@@ -1,95 +1,80 @@
 const express = require("express")
 const uploadAvatar = require("../middlewares/uploadAvatar.middleware")
-const authController =require("../controllers/auth.controller")
-const {verifyTempToken,verifyAccessToken} = require("../middlewares/auth.middleware")
-const registerValidator = require("../middlewares/validators/registerValidator.middleware")
-const resetPasswordValidator = require ("../middlewares/validators/resetPwValidator.middleware")
+const authController = require("../controllers/auth.controller")
+const { verifyTempToken, verifyAccessToken } = require("../middlewares/auth.middleware")
 const checkLogin = require("../middlewares/checkLogin.middleware")
 const otpLimiter = require("../middlewares/otpLimiter.middleware")
-
+const registerValidator = require("../middlewares/validators/registerValidator.middleware")
+const loginValidator = require("../middlewares/validators/loginValidator.middleware")
+const otpLoginValidator = require("../middlewares/validators/otpLoginValidator.middleware")
+const verifyOTPValidator = require("../middlewares/validators/verifyOTPValidator.middleware")
+const forgotPasswordValidator = require("../middlewares/validators/forgotPasswordValidator.middleware")
+const resetPasswordValidator = require("../middlewares/validators/resetPwValidator.middleware")
 
 const routes = express.Router()
 
-//resgister
-routes.post(
-    "/register",
+// ── Public ──────────────────────────────────────────────
+routes.post("/register",
     uploadAvatar,
     registerValidator,
     authController.registerUser
 )
 
-
-//verifyOTP
-routes.post(
-    "/verify-otp",
-    verifyTempToken,
-    otpLimiter,
-    authController.verifyOTP
-)
-
-
-//resendOTP
-routes.post(
-    "/resend-otp",
-    verifyTempToken,
-    otpLimiter,
-    authController.resendOTP
-)
-
-
-//pwLogin
-routes.post(
-    "/password-login",
-    checkLogin,
-    authController.login
-)
-
-
-//OTP login
-routes.post(
-    "/OTP-login",
-    checkLogin,
-    authController.loginOTP
-)
-
-//GetMe
-routes.get(
-    "/getMe",
-    verifyAccessToken,
-    authController.getMe
-)
-
-//forgotpw
-routes.post(
-    "/forgot-password",
+routes.post("/forgot-password",
+    forgotPasswordValidator,
     authController.forgotPassword
 )
 
-//resetPw
-routes.post(
-    "/reset-password",
+routes.post("/reset-password",
     verifyTempToken,
     resetPasswordValidator,
     authController.resetPassword
 )
 
+// ── OTP flow ─────────────────────────────────────────────
+routes.post("/verify-otp",
+    verifyTempToken,
+    otpLimiter,
+    verifyOTPValidator,
+    authController.verifyOTP
+)
 
-//token renewal endpoint
-routes.post(
-    "/rotate-refresh-token", 
+routes.post("/resend-otp",
+    verifyTempToken,
+    otpLimiter,
+    authController.resendOTP
+)
+
+// ── Login ─────────────────────────────────────────────────
+routes.post("/password-login",
+    checkLogin,
+    loginValidator,
+    authController.login
+)
+
+routes.post("/OTP-login",
+    checkLogin,
+    otpLoginValidator,
+    authController.loginOTP
+)
+
+// ── Token ─────────────────────────────────────────────────
+routes.post("/rotate-refresh-token",
     authController.rotateRefreshToken
 )
 
-//logOut 
-routes.post(
-    "/logOut", 
+// ── Protected ─────────────────────────────────────────────
+routes.get("/getMe",
+    verifyAccessToken,
+    authController.getMe
+)
+
+routes.post("/logOut",
     verifyAccessToken,
     authController.logout
 )
 
-//logout-all
-routes.post(
-    "/logOut-all", 
+routes.post("/logOut-all",
     verifyAccessToken,
     authController.logOutAll
 )
