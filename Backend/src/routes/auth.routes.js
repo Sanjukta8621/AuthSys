@@ -10,6 +10,11 @@ const otpLoginValidator = require("../middlewares/validators/otpLoginValidator.m
 const verifyOTPValidator = require("../middlewares/validators/verifyOTPValidator.middleware")
 const forgotPasswordValidator = require("../middlewares/validators/forgotPasswordValidator.middleware")
 const resetPasswordValidator = require("../middlewares/validators/resetPwValidator.middleware")
+const { passwordLoginLimiter } = require("../middlewares/rateLimiter.middleware")
+
+
+
+
 
 const routes = express.Router()
 
@@ -47,6 +52,7 @@ routes.post("/resend-otp",
 
 // ── Login ─────────────────────────────────────────────────
 routes.post("/password-login",
+    passwordLoginLimiter,
     checkLogin,
     loginValidator,
     authController.login

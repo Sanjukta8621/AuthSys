@@ -1,91 +1,90 @@
-// middlewares/auth.middleware.js
-const jwt = require("jsonwebtoken")
-const userModel = require("../models/user.model")
-const sessionModel = require("../models/session.model")
-const checkTempBlock = require("../utils/checkTempBlock")
+const catchAsync = require("../utils/catchAsync")
 
+const verifyTempToken = catchAsync(async (req, res, next) => {
 
-// ── For OTP routes — reads tempToken cookie ──
-async function verifyTempToken(req, res, next) {
+    const token = req.cookies.tempToken
+    if (!token) return next(new AppError("Unauthorized!", 401))
 
-    console.log("=========== VERIFY TEMP TOKEN ===========");
-    console.log("Cookies:", req.cookies);
-    console.log("Header Cookie:", req.headers.cookie);
+    let decoded
     try {
-        const token = req.cookies.tempToken
-
-        if (!token) {
-            return res.status(401).json({ message: "Unauthorized!" })
+        decoded = jwt.verify(token, process.env.JWT_SECRET)
+    } catch (err) {
+        if (err.name === "TokenExpiredError") {
+            return next(new AppError("Session expired. Please request a new OTP.", 401))
         }
-
-        const decoded = jwt.verify(token, process.env.JWT_SECRET)
-
-        if (decoded.type !== "temp") {
-            return res.status(401).json({ message: "Invalid token type!" })
-        }
-
-        const user = await userModel.findById(decoded.id)
-
-        if (!user) {
-            return res.status(401).json({ message: "User not found!" })
-        }
-
-        
-        checkTempBlock(user)
-
-        req.user = user
-        next()
-
-    } catch (error) {
-        return res.status(401).json({ message: error.message })
+        return next(new AppError("Invalid token!", 401))
     }
-}
+
+    if (decoded.type !== "temp") return next(new AppError("Invalid token type!", 401))
+
+    const user = await userModel.findById(decoded.id)
+    if (!user) return next(new AppError("User not found!", 401))
+
+    const blockStatus = await checkTempBlock(user)
+
+    if (blockStatus.blocked) {
+        logger.warn(`Blocked user attempted OTP route — userId: ${user._id}`)
+        return next(new AppError(blockStatus.message, 429))
+    }
+
+    if (blockStatus.expired) {
+        user.temporaryLockUntil = null
+        user.wrongOtpAttempt = 0
+        await user.save()
+    }
+
+    req.user = user
+    next()
+})
 
 
+const verifyAccessToken = catchAsync(async (req, res, next) => {
 
+    const authHeader = req.headers.authorization
+    if (!authHeader || !authHeader.startsWith("Bearer ")) {
+        return next(new AppError("Unauthorized!", 401))
+    }
 
+    const token = authHeader.split(" ")[1]
 
-
-// ── For protected routes — reads Authorization Bearer header ──
-async function verifyAccessToken(req, res, next) {
+    let decoded
     try {
-        const authHeader = req.headers.authorization
-
-        if (!authHeader || !authHeader.startsWith("Bearer ")) {
-            return res.status(401).json({ message: "Unauthorized!" })
+        decoded = jwt.verify(token, process.env.JWT_SECRET)
+    } catch (err) {
+        if (err.name === "TokenExpiredError") {
+            return next(new AppError("Access token expired. Please refresh.", 401))
         }
-
-        const token = authHeader.split(" ")[1]
-        const decoded = jwt.verify(token, process.env.JWT_SECRET)
-
-        if (decoded.type !== "access") {
-            return res.status(401).json({ message: "Invalid token type!" })
-        }
-
-        // verify session is still valid and not revoked
-        const session = await sessionModel.findOne({
-            _id: decoded.sessionId,
-            user: decoded.id,
-            revoked: false
-        })
-
-        if (!session) {
-            return res.status(401).json({ message: "Session expired or revoked!" })
-        }
-
-        const user = await userModel.findById(decoded.id)
-
-        if (!user) {
-            return res.status(401).json({ message: "User not found!" })
-        }
-
-        req.user = user
-        req.session = session
-        next()
-
-    } catch (error) {
-        return res.status(401).json({ message: error.message })
+        return next(new AppError("Invalid token!", 401))
     }
-}
+
+    if (decoded.type !== "access") return next(new AppError("Invalid token type!", 401))
+
+    const session = await sessionModel.findOne({
+        _id: decoded.sessionId,
+        user: decoded.id,
+        revoked: false
+    })
+
+    if (!session) {
+        logger.warn(`Revoked or invalid session — userId: ${decoded.id}`)
+        return next(new AppError("Session expired or revoked!", 401))
+    }
+
+    const user = await userModel.findById(decoded.id)
+    if (!user) return next(new AppError("User not found!", 401))
+
+    if (user.temporaryLockUntil && new Date() < user.temporaryLockUntil) {
+        const minutesLeft = Math.ceil((user.temporaryLockUntil - new Date()) / 60000)
+        logger.warn(`Blocked user hit protected route — userId: ${user._id}`)
+        return next(new AppError(
+            `Account blocked. Try again in ${minutesLeft} minute${minutesLeft > 1 ? "s" : ""}.`,
+            429
+        ))
+    }
+
+    req.user = user
+    req.session = session
+    next()
+})
 
 module.exports = { verifyTempToken, verifyAccessToken }

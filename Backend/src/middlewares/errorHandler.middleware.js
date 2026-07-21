@@ -1,5 +1,7 @@
 // middlewares/errorHandler.middleware.js
 const AppError = require("../utils/AppError")
+const logger = require("../utils/logger")
+
 
 // Handle specific known error types from MongoDB and JWT
 function handleCastError(err) {
@@ -47,7 +49,12 @@ function errorHandler(err, req, res, next) {
     }
 
     // ── programmer error: don't leak details ──
-    console.error("PROGRAMMER ERROR:", err)
+    logger.error(`PROGRAMMER ERROR: ${err.message}`, {
+        stack: err.stack,
+        url: req.originalUrl,
+        method: req.method
+    })
+    
     return res.status(500).json({
         success: false,
         message: "Something went wrong. Please try again later."

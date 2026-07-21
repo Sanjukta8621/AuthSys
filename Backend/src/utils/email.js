@@ -1,15 +1,15 @@
-const transporter= require("./transporter")
-async function sendEmail(to, otp, username,otpExpiry) {
+const transporter = require("./transporter")
+const logger = require("./logger")
 
-
+async function sendEmail(to, otp, username, otpExpiry) {
     try {
 
-        const expiryTime = new Date(otpExpiry).toLocaleString("en-IN",{
-        timeZone: "Asia/Kolkata"
-    }
-    )
+        const expiryTime = new Date(otpExpiry).toLocaleString("en-IN", {
+            timeZone: "Asia/Kolkata"
+        })
 
-        console.log("Sending email...")
+        logger.info(`Sending OTP email to ${to}`)
+
         const info = await transporter.sendMail({
             from: process.env.EMAIL,
             to,
@@ -19,14 +19,11 @@ async function sendEmail(to, otp, username,otpExpiry) {
                 <p>Your OTP is: ${otp} Valid till ${expiryTime}.</p>
             `
         })
-        console.log(to)
-        console.log("Email sent successfully!")
-        console.log(info.response)
-    }
 
-    catch (err) {
-        console.log("EMAIL ERROR:")
-        console.log(err)
+        logger.info(`OTP email sent successfully to ${to} — ${info.response}`)
+
+    } catch (err) {
+        logger.error(`OTP email failed for ${to}: ${err.message}`)
     }
 }
 

@@ -1,17 +1,9 @@
 const mongoose = require("mongoose")
-
-
+const logger = require("../utils/logger")
 
 async function dbConnect() {
-    try {
-        await mongoose.connect(process.env.MONGODB_URL)
-        console.log("Connected to db")
-    }
-    catch (e) {
-        console.log(e)
-    }
-} 
+    await mongoose.connect(process.env.MONGODB_URL)
+    logger.info(`Connected to MongoDB — ${mongoose.connection.name}`)
+}
 
-
-
-module.exports= dbConnect
+module.exports = dbConnect
