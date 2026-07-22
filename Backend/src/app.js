@@ -11,13 +11,16 @@ const authRouter = require("./routes/auth.routes")
 const { globalLimiter, authLimiter } = require("./middlewares/rateLimiter.middleware")
 const logger = require("./utils/logger")
 const requestLogger = require("./middlewares/requestLogger.middleware")
+const swaggerUI = require("swagger-ui-express");
+const swaggerSpec = require("./config/swagger");
 
 
 const app = express()
 
 //security header
-app.use(helmet())
-
+app.use(helmet({
+    contentSecurityPolicy: false   // swagger UI needs inline scripts
+}))
 //cors
 app.use(cors({
     origin: process.env.NODE_ENV === "production"
@@ -43,6 +46,14 @@ app.use(requestLogger)
 if (process.env.NODE_ENV === "development") {
     app.use(morgan("dev"))
 }
+
+
+//swagger
+app.use(
+    "/api-docs",
+    swaggerUI.serve,
+    swaggerUI.setup(swaggerSpec)
+);
 
 app.use("/api/v1/auth", authLimiter, authRouter)
 

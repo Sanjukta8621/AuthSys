@@ -19,6 +19,7 @@ const { passwordLoginLimiter } = require("../middlewares/rateLimiter.middleware"
 const routes = express.Router()
 
 // ── Public ──────────────────────────────────────────────
+
 routes.post("/register",
     uploadAvatar,
     registerValidator,
