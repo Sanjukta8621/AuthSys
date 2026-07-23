@@ -21,12 +21,14 @@ const app = express()
 app.use(helmet({
     contentSecurityPolicy: false   // swagger UI needs inline scripts
 }))
+
+
 //cors
 app.use(cors({
     origin: process.env.NODE_ENV === "production"
-        ? process.env.ALLOWED_ORIGIN        
-        : "http://localhost:3000",           
-    credentials: true                       
+        ? process.env.ALLOWED_ORIGIN
+        : "http://localhost:5173",
+    credentials: true
 }))
 
 //global rate limiter
