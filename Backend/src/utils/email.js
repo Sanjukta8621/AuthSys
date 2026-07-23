@@ -23,7 +23,8 @@ async function sendEmail(to, otp, username, otpExpiry) {
         logger.info(`OTP email sent successfully to ${to} — ${info.response}`)
 
     } catch (err) {
-        logger.error(`OTP email failed for ${to}: ${err.message}`)
+       // logger.error(`OTP email failed for ${to}: ${err.message}`)
+       logger.error(err)
     }
 }
 
